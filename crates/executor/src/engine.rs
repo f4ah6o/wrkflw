@@ -532,6 +532,7 @@ impl From<String> for ExecutionError {
 async fn prepare_action(
     action: &ActionInfo,
     runtime: &dyn ContainerRuntime,
+    with_params: Option<&HashMap<String, String>>,
 ) -> Result<String, ExecutionError> {
     if action.is_docker {
         // Docker action: pull the image
@@ -575,12 +576,12 @@ async fn prepare_action(
     }
 
     // GitHub action: determine appropriate image based on action type
-    let image = determine_action_image(&action.repository);
+    let image = determine_action_image(&action.repository, with_params);
     Ok(image)
 }
 
 /// Determine the appropriate Docker image for a GitHub action
-fn determine_action_image(repository: &str) -> String {
+fn determine_action_image(repository: &str, with_params: Option<&HashMap<String, String>>) -> String {
     // Handle specific well-known actions
     match repository {
         // PHP setup actions
@@ -598,7 +599,43 @@ fn determine_action_image(repository: &str) -> String {
         repo if repo.starts_with("actions/setup-java") => "eclipse-temurin:17-jdk".to_string(),
 
         // Go setup actions
-        repo if repo.starts_with("actions/setup-go") => "golang:1.21-slim".to_string(),
+        repo if repo.starts_with("actions/setup-go") => {
+            // Extract go-version from 'with' parameters
+            if let Some(params) = with_params {
+                if let Some(version) = params.get("go-version") {
+                    // Parse version string (e.g., "1.24", "1.21.5", "stable", "latest")
+                    let version_str = version.trim();
+
+                    // Handle special keywords
+                    let image_tag = match version_str {
+                        "latest" | "stable" => "latest".to_string(),
+                        _ => {
+                            // Extract major.minor version (e.g., "1.24" from "1.24.0")
+                            // Support formats: "1.24", "1.24.0", "^1.24", "~1.24"
+                            let clean_version = version_str
+                                .trim_start_matches('^')
+                                .trim_start_matches('~');
+
+                            // Split by dots and take first two parts for major.minor
+                            let parts: Vec<&str> = clean_version.split('.').collect();
+                            if parts.len() >= 2 {
+                                format!("{}.{}", parts[0], parts[1])
+                            } else if parts.len() == 1 {
+                                // If only major version specified (e.g., "1"), use latest 1.x
+                                format!("{}", parts[0])
+                            } else {
+                                "latest".to_string()
+                            }
+                        }
+                    };
+
+                    return format!("golang:{}", image_tag);
+                }
+            }
+
+            // Default to golang:latest if no version specified
+            "golang:latest".to_string()
+        }
 
         // .NET setup actions
         repo if repo.starts_with("actions/setup-dotnet") => {
@@ -1185,7 +1222,11 @@ async fn execute_step(ctx: StepExecutionContext<'_>) -> Result<StepResult, Execu
             }
         } else {
             // Get action info
-            let image = prepare_action(&action_info, ctx.runtime).await?;
+            let image = prepare_action(&action_info, ctx.runtime, ctx.step.with.as_ref()).await?;
+
+            if ctx.verbose {
+                wrkflw_logging::info(&format!("  Using Docker image: {}", image));
+            }
 
             // Special handling for composite actions
             if image == "composite" && action_info.is_local {
