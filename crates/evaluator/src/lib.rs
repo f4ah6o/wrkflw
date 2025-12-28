@@ -1,17 +1,23 @@
-use colored::*;
 use serde_yaml::{self, Value};
+
+#[cfg(feature = "cli")]
+use colored::*;
+
+#[cfg(feature = "cli")]
 use std::fs;
+
+#[cfg(feature = "cli")]
 use std::path::Path;
 
 use wrkflw_models::ValidationResult;
 use wrkflw_validators::{validate_jobs, validate_triggers};
 
-pub fn evaluate_workflow_file(path: &Path, verbose: bool) -> Result<ValidationResult, String> {
-    let content = fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))?;
-
+/// Evaluate a workflow from YAML content string.
+/// This function does not depend on filesystem access.
+pub fn evaluate_workflow_content(content: &str) -> Result<ValidationResult, String> {
     // Parse YAML content
     let workflow: Value =
-        serde_yaml::from_str(&content).map_err(|e| format!("Invalid YAML: {}", e))?;
+        serde_yaml::from_str(content).map_err(|e| format!("Invalid YAML: {}", e))?;
 
     let mut result = ValidationResult::new();
 
@@ -20,10 +26,6 @@ pub fn evaluate_workflow_file(path: &Path, verbose: bool) -> Result<ValidationRe
         result.add_issue("Workflow file is not a valid YAML mapping".to_string());
         return Ok(result);
     }
-
-    // Note: The 'name' field is optional per GitHub Actions specification.
-    // When omitted, GitHub displays the workflow file path relative to the repository root.
-    // We do not validate name presence as it's not required by the schema.
 
     // Check if jobs section exists
     match workflow.get("jobs") {
@@ -47,6 +49,16 @@ pub fn evaluate_workflow_file(path: &Path, verbose: bool) -> Result<ValidationRe
             result.add_issue("Workflow is missing 'on' section (triggers)".to_string());
         }
     }
+
+    Ok(result)
+}
+
+/// Evaluate a workflow from a file path.
+/// This function requires filesystem access (cli feature).
+#[cfg(feature = "cli")]
+pub fn evaluate_workflow_file(path: &Path, verbose: bool) -> Result<ValidationResult, String> {
+    let content = fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))?;
+    let result = evaluate_workflow_content(&content)?;
 
     if verbose && result.is_valid {
         println!(

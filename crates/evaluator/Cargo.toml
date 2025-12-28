@@ -10,11 +10,15 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+default = ["cli"]
+cli = ["colored"]
+
 [dependencies]
 # Internal crates
 wrkflw-models.workspace = true
 wrkflw-validators.workspace = true
 
 # External dependencies
-colored.workspace = true
+colored = { workspace = true, optional = true }
 serde_yaml.workspace = true

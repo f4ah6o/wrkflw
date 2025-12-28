@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "module": "esnext",
+    "target": "ES2020",
+    "outDir": "server/out",
+    "lib": ["ES2020", "WebWorker"],
+    "sourceMap": true,
+    "rootDir": "server/src",
+    "strict": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "moduleResolution": "bundler",
+    "types": []
+  },
+  "include": ["server/src/**/*"],
+  "exclude": ["node_modules", "out", "server/out"]
+}
