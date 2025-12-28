@@ -5,6 +5,7 @@ use bollard::{
     network::CreateNetworkOptions,
     Docker,
 };
+use dirs;
 use futures_util::StreamExt;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -22,6 +23,154 @@ static CREATED_NETWORKS: Lazy<Mutex<Vec<String>>> = Lazy::new(|| Mutex::new(Vec:
 static CUSTOMIZED_IMAGES: Lazy<Mutex<HashMap<String, String>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+/// Attempts to connect to a Unix socket at the given path with a short timeout.
+/// Returns immediately if the socket doesn't exist or connection fails.
+fn try_connect_socket(socket_path: &str) -> Result<Docker, ContainerError> {
+    // Quick check: socket file must exist
+    if !Path::new(socket_path).exists() {
+        wrkflw_logging::debug(&format!("Socket does not exist: {}", socket_path));
+        return Err(ContainerError::ContainerStart(format!(
+            "Socket not found: {}",
+            socket_path
+        )));
+    }
+
+    // Clone the path for use in spawned thread
+    let socket_path_owned = socket_path.to_string();
+
+    // Try to use an existing runtime or create a new one
+    let try_connect = move || {
+        let socket_path = socket_path_owned.clone();
+        async move {
+            match tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                Docker::connect_with_unix(&socket_path, 120, bollard::API_DEFAULT_VERSION)
+            })
+            .await
+            {
+                Ok(Ok(docker)) => {
+                    // Verify with ping
+                    match tokio::time::timeout(std::time::Duration::from_millis(500), docker.ping()).await {
+                        Ok(Ok(_)) => Ok(docker),
+                        Ok(Err(e)) => Err(ContainerError::ContainerStart(format!(
+                            "Ping failed: {}",
+                            e
+                        ))),
+                        Err(_) => Err(ContainerError::ContainerStart("Ping timed out".to_string())),
+                    }
+                }
+                Ok(Err(e)) => Err(ContainerError::ContainerStart(format!(
+                    "Connection failed: {}",
+                    e
+                ))),
+                Err(_) => Err(ContainerError::ContainerStart("Connection timed out".to_string())),
+            }
+        }
+    };
+
+    match tokio::runtime::Handle::try_current() {
+        Ok(_handle) => {
+            // We're in a runtime context, spawn a new thread for the connection attempt
+            // This avoids the "block_on within runtime" issue
+            match std::thread::spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| ContainerError::ContainerStart(format!("Failed to create runtime: {}", e)))?;
+                runtime.block_on(try_connect())
+            })
+            .join()
+            {
+                Ok(result) => result,
+                Err(_) => Err(ContainerError::ContainerStart("Thread panicked".to_string())),
+            }
+        }
+        Err(_) => {
+            // No runtime exists, create a new one
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| ContainerError::ContainerStart(format!("Failed to create runtime: {}", e)))?;
+
+            runtime.block_on(try_connect())
+        }
+    }
+}
+
+/// Attempts to connect to Docker daemon using multiple strategies.
+///
+/// Connection strategy:
+/// 1. If DOCKER_HOST is set, use it exclusively (bollard handles this)
+/// 2. Try default Docker socket (/var/run/docker.sock)
+/// 3. Try Rancher Desktop socket (~/.rd/docker.sock) on macOS/Linux
+/// 4. Try Colima socket (~/.colima/default/docker.sock) on macOS/Linux
+fn connect_to_docker() -> Result<Docker, ContainerError> {
+    // Check if DOCKER_HOST is set - if so, let bollard handle it
+    if let Ok(host) = std::env::var("DOCKER_HOST") {
+        wrkflw_logging::debug(&format!("DOCKER_HOST is set: {}", host));
+        return Docker::connect_with_local_defaults().map_err(|e| {
+            ContainerError::ContainerStart(format!("Failed to connect to Docker at DOCKER_HOST={}: {}", host, e))
+        });
+    }
+
+    // Strategy 1: Try default socket path
+    wrkflw_logging::debug("Attempting default Docker socket: /var/run/docker.sock");
+    if let Ok(docker) = try_connect_socket("/var/run/docker.sock") {
+        return Ok(docker);
+    }
+
+    // Strategy 2: Try Rancher Desktop socket (macOS/Linux)
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        if let Some(home) = dirs::home_dir() {
+            let rd_socket = home.join(".rd/docker.sock");
+            let path = rd_socket.to_string_lossy().to_string();
+            wrkflw_logging::debug(&format!("Attempting Rancher Desktop socket: {}", path));
+            if let Ok(docker) = try_connect_socket(&path) {
+                wrkflw_logging::info(&format!(
+                    "Connected to Docker via Rancher Desktop socket: {}",
+                    path
+                ));
+                return Ok(docker);
+            }
+        }
+    }
+
+    // Strategy 3: Try Colima socket (macOS/Linux)
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        if let Some(home) = dirs::home_dir() {
+            let colima_socket = home.join(".colima/default/docker.sock");
+            let path = colima_socket.to_string_lossy().to_string();
+            wrkflw_logging::debug(&format!("Attempting Colima socket: {}", path));
+            if let Ok(docker) = try_connect_socket(&path) {
+                wrkflw_logging::info(&format!("Connected to Docker via Colima socket: {}", path));
+                return Ok(docker);
+            }
+        }
+    }
+
+    // Strategy 4: On Windows, try named pipe (bollard handles this)
+    #[cfg(windows)]
+    {
+        wrkflw_logging::debug("Attempting Docker named pipe on Windows");
+        match Docker::connect_with_named_pipe("\\\\.\\pipe\\docker_engine") {
+            Ok(docker) => return Ok(docker),
+            Err(e) => {
+                wrkflw_logging::debug(&format!("Named pipe connection failed: {}", e));
+            }
+        }
+    }
+
+    // All strategies failed - try bollard's default as last resort
+    // This handles any other configurations bollard might detect
+    Docker::connect_with_local_defaults().map_err(|e| {
+        ContainerError::ContainerStart(format!(
+            "Failed to connect to Docker daemon. Tried: default socket, Rancher Desktop socket, Colima socket. Set DOCKER_HOST to override. Error: {}",
+            e
+        ))
+    })
+}
+
 pub struct DockerRuntime {
     docker: Docker,
     preserve_containers_on_failure: bool,
@@ -33,9 +182,7 @@ impl DockerRuntime {
     }
 
     pub fn new_with_config(preserve_containers_on_failure: bool) -> Result<Self, ContainerError> {
-        let docker = Docker::connect_with_local_defaults().map_err(|e| {
-            ContainerError::ContainerStart(format!("Failed to connect to Docker: {}", e))
-        })?;
+        let docker = connect_to_docker()?;
 
         Ok(DockerRuntime {
             docker,
@@ -276,123 +423,23 @@ impl DockerRuntime {
 }
 
 pub fn is_available() -> bool {
-    // Use a very short timeout for the entire availability check
-    let overall_timeout = std::time::Duration::from_secs(3);
+    // Use a timeout for the entire availability check
+    let overall_timeout = std::time::Duration::from_secs(5);
 
     // Spawn a thread with the timeout to prevent blocking the main thread
     let handle = std::thread::spawn(move || {
         // Use safe FD redirection utility to suppress Docker error messages
-        match fd::with_stderr_to_null(|| {
-            // First, check if docker CLI is available as a quick test
-            if cfg!(target_os = "linux") || cfg!(target_os = "macos") {
-                // Try a simple docker version command with a short timeout
-                let process = std::process::Command::new("docker")
-                    .arg("version")
-                    .arg("--format")
-                    .arg("{{.Server.Version}}")
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .spawn();
-
-                match process {
-                    Ok(mut child) => {
-                        // Set a very short timeout for the process
-                        let status = std::thread::scope(|_| {
-                            // Try to wait for a short time
-                            for _ in 0..10 {
-                                match child.try_wait() {
-                                    Ok(Some(status)) => return status.success(),
-                                    Ok(None) => {
-                                        std::thread::sleep(std::time::Duration::from_millis(100))
-                                    }
-                                    Err(_) => return false,
-                                }
-                            }
-                            // Kill it if it takes too long
-                            let _ = child.kill();
-                            false
-                        });
-
-                        if !status {
-                            return false;
-                        }
-                    }
-                    Err(_) => {
-                        wrkflw_logging::debug("Docker CLI is not available");
-                        return false;
-                    }
-                }
-            }
-
-            // Try to connect to Docker daemon with a short timeout
-            let runtime = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => rt,
+        fd::with_stderr_to_null(|| {
+            // Try to connect using our multi-strategy approach
+            match connect_to_docker() {
+                Ok(_) => true,
                 Err(e) => {
-                    wrkflw_logging::error(&format!(
-                        "Failed to create runtime for Docker availability check: {}",
-                        e
-                    ));
-                    return false;
+                    wrkflw_logging::debug(&format!("Docker availability check failed: {}", e));
+                    false
                 }
-            };
-
-            runtime.block_on(async {
-                match tokio::time::timeout(std::time::Duration::from_secs(2), async {
-                    match Docker::connect_with_local_defaults() {
-                        Ok(docker) => {
-                            // Try to ping the Docker daemon with a short timeout
-                            match tokio::time::timeout(
-                                std::time::Duration::from_secs(1),
-                                docker.ping(),
-                            )
-                            .await
-                            {
-                                Ok(Ok(_)) => true,
-                                Ok(Err(e)) => {
-                                    wrkflw_logging::debug(&format!(
-                                        "Docker daemon ping failed: {}",
-                                        e
-                                    ));
-                                    false
-                                }
-                                Err(_) => {
-                                    wrkflw_logging::debug(
-                                        "Docker daemon ping timed out after 1 second",
-                                    );
-                                    false
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            wrkflw_logging::debug(&format!(
-                                "Docker daemon connection failed: {}",
-                                e
-                            ));
-                            false
-                        }
-                    }
-                })
-                .await
-                {
-                    Ok(result) => result,
-                    Err(_) => {
-                        wrkflw_logging::debug("Docker availability check timed out");
-                        false
-                    }
-                }
-            })
-        }) {
-            Ok(result) => result,
-            Err(_) => {
-                wrkflw_logging::debug(
-                    "Failed to redirect stderr when checking Docker availability",
-                );
-                false
             }
-        }
+        })
+        .unwrap_or(false)
     });
 
     // Manual implementation of join with timeout
