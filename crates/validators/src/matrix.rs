@@ -106,7 +106,7 @@ fn validate_matrix_parameter(name: &str, value: &Value, result: &mut ValidationR
     }
 }
 
-fn get_value_type(value: &Value) -> &'static str {
+pub(crate) fn get_value_type(value: &Value) -> &'static str {
     match value {
         Value::Null => "null",
         Value::Bool(_) => "boolean",
@@ -115,5 +115,154 @@ fn get_value_type(value: &Value) -> &'static str {
         Value::Sequence(_) => "array",
         Value::Mapping(_) => "object",
         _ => "unknown",
+    }
+}
+
+#[cfg(test)]
+mod proptest_tests {
+    use super::*;
+    use proptest::prelude::*;
+    use serde_yaml::Number;
+
+    /// Generate a simple YAML value
+    fn arb_simple_value() -> impl Strategy<Value = Value> {
+        prop_oneof![
+            "[a-zA-Z][a-zA-Z0-9_]{0,10}".prop_map(Value::String),
+            (0i64..100).prop_map(|n| Value::Number(Number::from(n))),
+            any::<bool>().prop_map(Value::Bool),
+        ]
+    }
+
+    /// Generate a valid matrix parameter (array of same-type values)
+    fn arb_consistent_array() -> impl Strategy<Value = Value> {
+        prop_oneof![
+            proptest::collection::vec("[a-zA-Z][a-zA-Z0-9]{0,8}", 1..=4)
+                .prop_map(|v| Value::Sequence(v.into_iter().map(Value::String).collect())),
+            proptest::collection::vec(0i64..100, 1..=4)
+                .prop_map(|v| Value::Sequence(v.into_iter().map(|n| Value::Number(Number::from(n))).collect())),
+            proptest::collection::vec(any::<bool>(), 1..=4)
+                .prop_map(|v| Value::Sequence(v.into_iter().map(Value::Bool).collect())),
+        ]
+    }
+
+    /// Generate a matrix with consistent types
+    fn arb_valid_matrix() -> impl Strategy<Value = Value> {
+        proptest::collection::vec(
+            ("[a-zA-Z][a-zA-Z0-9_]{1,10}", arb_consistent_array()),
+            1..=3,
+        )
+        .prop_map(|pairs| {
+            let mut map = serde_yaml::Mapping::new();
+            for (k, v) in pairs {
+                map.insert(Value::String(k), v);
+            }
+            Value::Mapping(map)
+        })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// get_value_type should return correct type for all values
+        #[test]
+        fn prop_get_value_type_correct(value in arb_simple_value()) {
+            let type_str = get_value_type(&value);
+            match &value {
+                Value::String(_) => prop_assert_eq!(type_str, "string"),
+                Value::Number(_) => prop_assert_eq!(type_str, "number"),
+                Value::Bool(_) => prop_assert_eq!(type_str, "boolean"),
+                _ => {}
+            }
+        }
+
+        /// Valid matrix with consistent types should not produce type errors
+        #[test]
+        fn prop_valid_matrix_no_type_errors(matrix in arb_valid_matrix()) {
+            let mut result = ValidationResult::new();
+            validate_matrix(&matrix, &mut result);
+            let has_type_error = result.issues.iter().any(|i| i.contains("inconsistent types"));
+            prop_assert!(!has_type_error, "Valid matrix should not have type errors");
+        }
+
+        /// Matrix must be a mapping
+        #[test]
+        fn prop_non_mapping_matrix_invalid(value in arb_simple_value()) {
+            let mut result = ValidationResult::new();
+            validate_matrix(&value, &mut result);
+            prop_assert!(
+                !result.is_valid,
+                "Non-mapping value should be invalid as matrix"
+            );
+        }
+
+        /// max-parallel must be a positive number
+        #[test]
+        fn prop_max_parallel_zero_invalid(_dummy in Just(())) {
+            let mut map = serde_yaml::Mapping::new();
+            map.insert(
+                Value::String("os".to_string()),
+                Value::Sequence(vec![Value::String("ubuntu".to_string())]),
+            );
+            map.insert(
+                Value::String("max-parallel".to_string()),
+                Value::Number(Number::from(0)),
+            );
+
+            let mut result = ValidationResult::new();
+            validate_matrix(&Value::Mapping(map), &mut result);
+            let has_zero_error = result.issues.iter().any(|i| i.contains("greater than 0"));
+            prop_assert!(has_zero_error, "max-parallel=0 should produce error");
+        }
+
+        /// fail-fast must be a boolean
+        #[test]
+        fn prop_fail_fast_non_bool_invalid(value in arb_simple_value().prop_filter("Not bool", |v| !v.is_bool())) {
+            let mut map = serde_yaml::Mapping::new();
+            map.insert(
+                Value::String("os".to_string()),
+                Value::Sequence(vec![Value::String("ubuntu".to_string())]),
+            );
+            map.insert(Value::String("fail-fast".to_string()), value);
+
+            let mut result = ValidationResult::new();
+            validate_matrix(&Value::Mapping(map), &mut result);
+            let has_bool_error = result.issues.iter().any(|i| i.contains("must be a boolean"));
+            prop_assert!(has_bool_error, "Non-bool fail-fast should produce error");
+        }
+    }
+
+    #[test]
+    fn test_get_value_type_null() {
+        assert_eq!(get_value_type(&Value::Null), "null");
+    }
+
+    #[test]
+    fn test_get_value_type_sequence() {
+        assert_eq!(get_value_type(&Value::Sequence(vec![])), "array");
+    }
+
+    #[test]
+    fn test_get_value_type_mapping() {
+        assert_eq!(
+            get_value_type(&Value::Mapping(serde_yaml::Mapping::new())),
+            "object"
+        );
+    }
+
+    #[test]
+    fn test_include_must_be_array() {
+        let mut map = serde_yaml::Mapping::new();
+        map.insert(
+            Value::String("os".to_string()),
+            Value::Sequence(vec![Value::String("ubuntu".to_string())]),
+        );
+        map.insert(
+            Value::String("include".to_string()),
+            Value::String("invalid".to_string()),
+        );
+
+        let mut result = ValidationResult::new();
+        validate_matrix(&Value::Mapping(map), &mut result);
+        assert!(result.issues.iter().any(|i| i.contains("must be an array")));
     }
 }

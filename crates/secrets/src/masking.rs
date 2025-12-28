@@ -225,6 +225,150 @@ impl Default for SecretMasker {
 mod tests {
     use super::*;
 
+    mod proptest_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Generate a secret of varying length
+        fn arb_secret() -> impl Strategy<Value = String> {
+            "[a-zA-Z0-9_-]{3,50}"
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(256))]
+
+            /// Masked text should not contain the original secret
+            #[test]
+            fn prop_mask_hides_secret(secret in arb_secret()) {
+                let mut masker = SecretMasker::new();
+                masker.add_secret(secret.clone());
+
+                let input = format!("The secret is {} here", secret);
+                let masked = masker.mask(&input);
+
+                prop_assert!(
+                    !masked.contains(&secret),
+                    "Masked text should not contain secret"
+                );
+            }
+
+            /// Secrets shorter than min_length should not be added
+            #[test]
+            fn prop_short_secrets_not_added(secret in "[a-zA-Z0-9]{1,2}") {
+                let mut masker = SecretMasker::new();
+                masker.add_secret(secret.clone());
+                prop_assert_eq!(masker.secret_count(), 0, "Short secret should not be added");
+            }
+
+            /// Secrets at min_length should be added
+            #[test]
+            fn prop_min_length_secrets_added(secret in "[a-zA-Z0-9]{3}") {
+                let mut masker = SecretMasker::new();
+                masker.add_secret(secret.clone());
+                prop_assert_eq!(masker.secret_count(), 1, "Min length secret should be added");
+            }
+
+            /// Mask should contain mask characters
+            #[test]
+            fn prop_mask_contains_mask_chars(secret in "[a-zA-Z0-9]{4,30}") {
+                let mut masker = SecretMasker::new();
+                masker.add_secret(secret.clone());
+
+                let input = format!("Secret: {}", secret);
+                let masked = masker.mask(&input);
+
+                prop_assert!(masked.contains('*'), "Masked text should contain * characters");
+            }
+
+            /// contains_secrets returns true when secret is present
+            #[test]
+            fn prop_contains_secrets_true(secret in arb_secret()) {
+                let mut masker = SecretMasker::new();
+                masker.add_secret(secret.clone());
+
+                let input = format!("The secret is {}", secret);
+                prop_assert!(
+                    masker.contains_secrets(&input),
+                    "Should detect secret in text"
+                );
+            }
+
+            /// contains_secrets returns false when no secret is present
+            #[test]
+            fn prop_contains_secrets_false(secret in arb_secret()) {
+                let mut masker = SecretMasker::new();
+                masker.add_secret(secret);
+
+                let input = "This text has no secrets";
+                prop_assert!(
+                    !masker.contains_secrets(input),
+                    "Should not detect secret in clean text"
+                );
+            }
+
+            /// Custom mask character works correctly
+            #[test]
+            fn prop_custom_mask_char(secret in "[a-zA-Z0-9]{4,20}", mask_char in "[X#@]") {
+                let char = mask_char.chars().next().unwrap();
+                let mut masker = SecretMasker::with_mask_char(char);
+                masker.add_secret(secret.clone());
+
+                let input = format!("Secret: {}", secret);
+                let masked = masker.mask(&input);
+
+                prop_assert!(
+                    masked.contains(char),
+                    "Masked text should contain custom mask char"
+                );
+            }
+
+            /// remove_secret actually removes the secret
+            #[test]
+            fn prop_remove_secret(secret in arb_secret()) {
+                let mut masker = SecretMasker::new();
+                masker.add_secret(secret.clone());
+                prop_assert!(masker.has_secret(&secret));
+
+                masker.remove_secret(&secret);
+                prop_assert!(!masker.has_secret(&secret));
+            }
+
+            /// clear removes all secrets
+            #[test]
+            fn prop_clear_removes_all(secrets in proptest::collection::vec(arb_secret(), 1..=5)) {
+                let mut masker = SecretMasker::new();
+                for secret in &secrets {
+                    masker.add_secret(secret.clone());
+                }
+
+                masker.clear();
+                prop_assert_eq!(masker.secret_count(), 0, "Clear should remove all secrets");
+            }
+
+            /// Long secrets preserve first 2 and last 2 characters
+            #[test]
+            fn prop_long_secret_mask_structure(secret in "[a-zA-Z0-9]{10,30}") {
+                let mut masker = SecretMasker::new();
+                masker.add_secret(secret.clone());
+
+                let input = format!("Key: {}", secret);
+                let masked = masker.mask(&input);
+
+                let first_two: String = secret.chars().take(2).collect();
+                let last_two: String = secret.chars().skip(secret.len() - 2).collect();
+
+                prop_assert!(
+                    masked.contains(&first_two),
+                    "Should preserve first 2 chars"
+                );
+                prop_assert!(
+                    masked.contains(&last_two),
+                    "Should preserve last 2 chars"
+                );
+            }
+        }
+    }
+
     #[test]
     fn test_basic_masking() {
         let mut masker = SecretMasker::new();

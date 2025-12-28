@@ -336,3 +336,308 @@ pub mod gitlab {
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod proptest_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Generate an arbitrary issue string
+        fn arb_issue() -> impl Strategy<Value = String> {
+            "[a-zA-Z0-9 :._-]{1,100}"
+        }
+
+        /// Generate an arbitrary list of issues
+        fn arb_issues() -> impl Strategy<Value = Vec<String>> {
+            proptest::collection::vec(arb_issue(), 0..10)
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(256))]
+
+            /// ValidationResult::new() should always be valid with no issues
+            #[test]
+            fn prop_new_is_valid(_dummy in Just(())) {
+                let result = ValidationResult::new();
+                prop_assert!(result.is_valid);
+                prop_assert!(result.issues.is_empty());
+            }
+
+            /// ValidationResult::default() should equal new()
+            #[test]
+            fn prop_default_equals_new(_dummy in Just(())) {
+                let new_result = ValidationResult::new();
+                let default_result = ValidationResult::default();
+                prop_assert_eq!(new_result.is_valid, default_result.is_valid);
+                prop_assert_eq!(new_result.issues, default_result.issues);
+            }
+
+            /// add_issue should set is_valid to false
+            #[test]
+            fn prop_add_issue_invalidates(issue in arb_issue()) {
+                let mut result = ValidationResult::new();
+                result.add_issue(issue);
+                prop_assert!(!result.is_valid);
+            }
+
+            /// add_issue should add the issue to the list
+            #[test]
+            fn prop_add_issue_appends(issue in arb_issue()) {
+                let mut result = ValidationResult::new();
+                result.add_issue(issue.clone());
+                prop_assert_eq!(result.issues.len(), 1);
+                prop_assert_eq!(&result.issues[0], &issue);
+            }
+
+            /// Multiple add_issue calls accumulate issues
+            #[test]
+            fn prop_issues_accumulate(issues in arb_issues()) {
+                let mut result = ValidationResult::new();
+                for issue in &issues {
+                    result.add_issue(issue.clone());
+                }
+                prop_assert_eq!(result.issues.len(), issues.len());
+                prop_assert_eq!(result.issues, issues);
+            }
+
+            /// is_valid remains false after becoming false
+            #[test]
+            fn prop_is_valid_stays_false(issues in proptest::collection::vec(arb_issue(), 1..5)) {
+                let mut result = ValidationResult::new();
+                for issue in &issues {
+                    result.add_issue(issue.clone());
+                    prop_assert!(!result.is_valid, "is_valid should stay false");
+                }
+            }
+
+            /// Empty issues means is_valid should be true (only for new instances)
+            #[test]
+            fn prop_empty_issues_valid(_dummy in Just(())) {
+                let result = ValidationResult::new();
+                prop_assert!(result.issues.is_empty());
+                prop_assert!(result.is_valid);
+            }
+        }
+    }
+
+    mod gitlab_proptest_tests {
+        use super::gitlab::*;
+        use proptest::prelude::*;
+        use std::collections::HashMap;
+
+        /// Generate an arbitrary image name
+        fn arb_image_name() -> impl Strategy<Value = String> {
+            "[a-z][a-z0-9_/-]{1,30}(:[a-z0-9._-]{1,20})?"
+        }
+
+        /// Generate an arbitrary stage name
+        fn arb_stage_name() -> impl Strategy<Value = String> {
+            "(build|test|deploy|lint|release|validate)"
+        }
+
+        /// Generate an arbitrary job name
+        fn arb_job_name() -> impl Strategy<Value = String> {
+            "[a-z][a-z0-9_-]{1,20}"
+        }
+
+        /// Generate arbitrary script commands
+        fn arb_scripts() -> impl Strategy<Value = Vec<String>> {
+            proptest::collection::vec("[a-zA-Z0-9 ./|&-]{1,50}", 1..5)
+        }
+
+        /// Generate arbitrary variable map
+        fn arb_variables() -> impl Strategy<Value = HashMap<String, String>> {
+            proptest::collection::hash_map(
+                "[A-Z][A-Z0-9_]{1,20}",
+                "[a-zA-Z0-9_.-]{0,50}",
+                0..5,
+            )
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(256))]
+
+            /// Image::Simple roundtrip through serde_yaml
+            #[test]
+            fn prop_image_simple_roundtrip(name in arb_image_name()) {
+                let image = Image::Simple(name.clone());
+                let yaml = serde_yaml::to_string(&image).unwrap();
+                let parsed: Image = serde_yaml::from_str(&yaml).unwrap();
+                match parsed {
+                    Image::Simple(parsed_name) => prop_assert_eq!(parsed_name, name),
+                    _ => prop_assert!(false, "Expected Simple variant"),
+                }
+            }
+
+            /// Artifacts roundtrip through serde_yaml
+            #[test]
+            fn prop_artifacts_roundtrip(
+                paths in proptest::option::of(proptest::collection::vec("[a-z./]{1,20}", 1..3)),
+                expire_in in proptest::option::of("(1 hour|1 day|1 week|30 days)"),
+                when in proptest::option::of("(on_success|on_failure|always)")
+            ) {
+                let artifacts = Artifacts { paths, expire_in, when };
+                let yaml = serde_yaml::to_string(&artifacts).unwrap();
+                let parsed: Artifacts = serde_yaml::from_str(&yaml).unwrap();
+                prop_assert_eq!(parsed.paths, artifacts.paths);
+                prop_assert_eq!(parsed.expire_in, artifacts.expire_in);
+                prop_assert_eq!(parsed.when, artifacts.when);
+            }
+
+            /// Cache roundtrip through serde_yaml
+            #[test]
+            fn prop_cache_roundtrip(
+                key in proptest::option::of("[a-z0-9_-]{1,20}"),
+                paths in proptest::option::of(proptest::collection::vec("[a-z./]{1,20}", 1..3)),
+                when in proptest::option::of("(on_success|on_failure|always)"),
+                policy in proptest::option::of("(pull|push|pull-push)")
+            ) {
+                let cache = Cache { key, paths, when, policy };
+                let yaml = serde_yaml::to_string(&cache).unwrap();
+                let parsed: Cache = serde_yaml::from_str(&yaml).unwrap();
+                prop_assert_eq!(parsed.key, cache.key);
+                prop_assert_eq!(parsed.paths, cache.paths);
+                prop_assert_eq!(parsed.when, cache.when);
+                prop_assert_eq!(parsed.policy, cache.policy);
+            }
+
+            /// Retry::MaxAttempts roundtrip
+            #[test]
+            fn prop_retry_max_attempts_roundtrip(max in 1u32..5) {
+                let retry = Retry::MaxAttempts(max);
+                let yaml = serde_yaml::to_string(&retry).unwrap();
+                let parsed: Retry = serde_yaml::from_str(&yaml).unwrap();
+                match parsed {
+                    Retry::MaxAttempts(parsed_max) => prop_assert_eq!(parsed_max, max),
+                    _ => prop_assert!(false, "Expected MaxAttempts variant"),
+                }
+            }
+
+            /// Service::Simple roundtrip
+            #[test]
+            fn prop_service_simple_roundtrip(name in arb_image_name()) {
+                let service = Service::Simple(name.clone());
+                let yaml = serde_yaml::to_string(&service).unwrap();
+                let parsed: Service = serde_yaml::from_str(&yaml).unwrap();
+                match parsed {
+                    Service::Simple(parsed_name) => prop_assert_eq!(parsed_name, name),
+                    _ => prop_assert!(false, "Expected Simple variant"),
+                }
+            }
+
+            /// Include::Local roundtrip
+            #[test]
+            fn prop_include_local_roundtrip(path in "[a-z./]{1,30}\\.ya?ml") {
+                let include = Include::Local(path.clone());
+                let yaml = serde_yaml::to_string(&include).unwrap();
+                let parsed: Include = serde_yaml::from_str(&yaml).unwrap();
+                match parsed {
+                    Include::Local(parsed_path) => prop_assert_eq!(parsed_path, path),
+                    _ => prop_assert!(false, "Expected Local variant"),
+                }
+            }
+
+            /// Only::Refs roundtrip
+            #[test]
+            fn prop_only_refs_roundtrip(refs in proptest::collection::vec("(main|master|develop|feature/.*)", 1..3)) {
+                let only = Only::Refs(refs.clone());
+                let yaml = serde_yaml::to_string(&only).unwrap();
+                let parsed: Only = serde_yaml::from_str(&yaml).unwrap();
+                match parsed {
+                    Only::Refs(parsed_refs) => prop_assert_eq!(parsed_refs, refs),
+                    _ => prop_assert!(false, "Expected Refs variant"),
+                }
+            }
+
+            /// Except::Refs roundtrip
+            #[test]
+            fn prop_except_refs_roundtrip(refs in proptest::collection::vec("(main|master|develop|feature/.*)", 1..3)) {
+                let except = Except::Refs(refs.clone());
+                let yaml = serde_yaml::to_string(&except).unwrap();
+                let parsed: Except = serde_yaml::from_str(&yaml).unwrap();
+                match parsed {
+                    Except::Refs(parsed_refs) => prop_assert_eq!(parsed_refs, refs),
+                    _ => prop_assert!(false, "Expected Refs variant"),
+                }
+            }
+
+            /// Rule struct roundtrip
+            #[test]
+            fn prop_rule_roundtrip(
+                if_ in proptest::option::of("\\$[A-Z_]+ == \"[a-z]+\""),
+                when in proptest::option::of("(on_success|on_failure|always|manual|delayed)")
+            ) {
+                let rule = Rule { if_, when, variables: None };
+                let yaml = serde_yaml::to_string(&rule).unwrap();
+                let parsed: Rule = serde_yaml::from_str(&yaml).unwrap();
+                prop_assert_eq!(parsed.if_, rule.if_);
+                prop_assert_eq!(parsed.when, rule.when);
+            }
+
+            /// Job with script roundtrip
+            #[test]
+            fn prop_job_with_script_roundtrip(
+                stage in proptest::option::of(arb_stage_name()),
+                script in proptest::option::of(arb_scripts())
+            ) {
+                let job = Job {
+                    stage,
+                    image: None,
+                    script,
+                    before_script: None,
+                    after_script: None,
+                    when: None,
+                    allow_failure: None,
+                    services: None,
+                    tags: None,
+                    variables: None,
+                    dependencies: None,
+                    artifacts: None,
+                    cache: None,
+                    rules: None,
+                    only: None,
+                    except: None,
+                    retry: None,
+                    timeout: None,
+                    parallel: None,
+                    template: None,
+                    extends: None,
+                };
+                let yaml = serde_yaml::to_string(&job).unwrap();
+                let parsed: Job = serde_yaml::from_str(&yaml).unwrap();
+                prop_assert_eq!(parsed.stage, job.stage);
+                prop_assert_eq!(parsed.script, job.script);
+            }
+        }
+    }
+
+    #[test]
+    fn test_validation_result_new() {
+        let result = ValidationResult::new();
+        assert!(result.is_valid);
+        assert!(result.issues.is_empty());
+    }
+
+    #[test]
+    fn test_validation_result_add_issue() {
+        let mut result = ValidationResult::new();
+        result.add_issue("Test issue".to_string());
+
+        assert!(!result.is_valid);
+        assert_eq!(result.issues.len(), 1);
+        assert_eq!(result.issues[0], "Test issue");
+    }
+
+    #[test]
+    fn test_validation_result_multiple_issues() {
+        let mut result = ValidationResult::new();
+        result.add_issue("Issue 1".to_string());
+        result.add_issue("Issue 2".to_string());
+
+        assert!(!result.is_valid);
+        assert_eq!(result.issues.len(), 2);
+    }
+}

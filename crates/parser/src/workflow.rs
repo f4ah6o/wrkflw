@@ -159,7 +159,7 @@ pub fn parse_workflow(path: &Path) -> Result<WorkflowDefinition, String> {
     Ok(workflow)
 }
 
-fn normalize_triggers(on_value: &serde_yaml::Value) -> Result<Vec<String>, String> {
+pub(crate) fn normalize_triggers(on_value: &serde_yaml::Value) -> Result<Vec<String>, String> {
     let mut triggers = Vec::new();
 
     match on_value {
@@ -189,4 +189,189 @@ fn normalize_triggers(on_value: &serde_yaml::Value) -> Result<Vec<String>, Strin
     }
 
     Ok(triggers)
+}
+
+#[cfg(test)]
+mod proptest_tests {
+    use super::*;
+    use proptest::prelude::*;
+    use serde_yaml::Value;
+
+    // Valid GitHub Actions trigger events
+    const VALID_EVENTS: &[&str] = &[
+        "push",
+        "pull_request",
+        "workflow_dispatch",
+        "schedule",
+        "release",
+        "create",
+        "delete",
+        "fork",
+        "issues",
+        "issue_comment",
+    ];
+
+    /// Generate a valid trigger event name
+    fn arb_valid_event() -> impl Strategy<Value = String> {
+        proptest::sample::select(VALID_EVENTS).prop_map(|s| s.to_string())
+    }
+
+    /// Generate a valid action reference with version
+    fn arb_action_with_version() -> impl Strategy<Value = String> {
+        (
+            "[a-zA-Z][a-zA-Z0-9_-]{2,15}",
+            "[a-zA-Z][a-zA-Z0-9_-]{2,15}",
+            "(v[0-9]+|main|master|[a-f0-9]{7,40})",
+        )
+            .prop_map(|(owner, repo, version)| format!("{}/{}@{}", owner, repo, version))
+    }
+
+    /// Generate a docker action reference
+    fn arb_docker_action() -> impl Strategy<Value = String> {
+        "[a-z][a-z0-9_/-]{2,30}(:[a-zA-Z0-9._-]+)?".prop_map(|image| format!("docker://{}", image))
+    }
+
+    /// Generate a local action reference
+    fn arb_local_action() -> impl Strategy<Value = String> {
+        "[a-zA-Z][a-zA-Z0-9_/-]{1,20}".prop_map(|path| format!("./{}", path))
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// normalize_triggers handles string format
+        #[test]
+        fn prop_normalize_string_trigger(event in arb_valid_event()) {
+            let value = Value::String(event.clone());
+            let result = normalize_triggers(&value);
+            prop_assert!(result.is_ok());
+            let triggers = result.unwrap();
+            prop_assert_eq!(triggers.len(), 1);
+            prop_assert_eq!(&triggers[0], &event);
+        }
+
+        /// normalize_triggers handles array format
+        #[test]
+        fn prop_normalize_array_triggers(events in proptest::collection::vec(arb_valid_event(), 1..=5)) {
+            let value = Value::Sequence(events.iter().map(|s| Value::String(s.clone())).collect());
+            let result = normalize_triggers(&value);
+            prop_assert!(result.is_ok());
+            let triggers = result.unwrap();
+            prop_assert_eq!(triggers.len(), events.len());
+            for (expected, actual) in events.iter().zip(triggers.iter()) {
+                prop_assert_eq!(expected, actual);
+            }
+        }
+
+        /// normalize_triggers handles mapping format
+        #[test]
+        fn prop_normalize_mapping_triggers(events in proptest::collection::vec(arb_valid_event(), 1..=5)) {
+            let mut map = serde_yaml::Mapping::new();
+            for event in &events {
+                map.insert(Value::String(event.clone()), Value::Null);
+            }
+            let value = Value::Mapping(map.clone());
+            let result = normalize_triggers(&value);
+            prop_assert!(result.is_ok());
+            let triggers = result.unwrap();
+            // Mapping keys are unique, so check against actual map size
+            prop_assert_eq!(triggers.len(), map.len());
+        }
+
+        /// normalize_triggers rejects null
+        #[test]
+        fn prop_normalize_null_fails(_dummy in Just(())) {
+            let result = normalize_triggers(&Value::Null);
+            prop_assert!(result.is_err());
+        }
+
+        /// resolve_action correctly parses versioned actions
+        #[test]
+        fn prop_resolve_versioned_action(action_ref in arb_action_with_version()) {
+            let workflow = WorkflowDefinition {
+                name: "test".to_string(),
+                on: vec![],
+                on_raw: Value::Null,
+                jobs: HashMap::new(),
+            };
+            let info = workflow.resolve_action(&action_ref);
+            prop_assert!(!info.is_docker);
+            prop_assert!(!info.is_local);
+            // Repository should be the part before @
+            let expected_repo = action_ref.split('@').next().unwrap();
+            prop_assert_eq!(info.repository, expected_repo);
+        }
+
+        /// resolve_action correctly identifies docker actions
+        #[test]
+        fn prop_resolve_docker_action(action_ref in arb_docker_action()) {
+            let workflow = WorkflowDefinition {
+                name: "test".to_string(),
+                on: vec![],
+                on_raw: Value::Null,
+                jobs: HashMap::new(),
+            };
+            let info = workflow.resolve_action(&action_ref);
+            prop_assert!(info.is_docker, "Docker action should be identified as docker");
+            prop_assert!(!info.is_local);
+        }
+
+        /// resolve_action correctly identifies local actions
+        #[test]
+        fn prop_resolve_local_action(action_ref in arb_local_action()) {
+            let workflow = WorkflowDefinition {
+                name: "test".to_string(),
+                on: vec![],
+                on_raw: Value::Null,
+                jobs: HashMap::new(),
+            };
+            let info = workflow.resolve_action(&action_ref);
+            prop_assert!(info.is_local, "Local action should be identified as local");
+            prop_assert!(!info.is_docker);
+        }
+    }
+
+    #[test]
+    fn test_normalize_empty_sequence() {
+        let value = Value::Sequence(vec![]);
+        let result = normalize_triggers(&value);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_resolve_action_without_version() {
+        let workflow = WorkflowDefinition {
+            name: "test".to_string(),
+            on: vec![],
+            on_raw: Value::Null,
+            jobs: HashMap::new(),
+        };
+        let info = workflow.resolve_action("actions/checkout");
+        assert_eq!(info.repository, "actions/checkout");
+        assert!(!info.is_docker);
+        assert!(!info.is_local);
+    }
+
+    #[test]
+    fn test_resolve_well_known_actions() {
+        let workflow = WorkflowDefinition {
+            name: "test".to_string(),
+            on: vec![],
+            on_raw: Value::Null,
+            jobs: HashMap::new(),
+        };
+
+        // Test actions/checkout
+        let info = workflow.resolve_action("actions/checkout@v4");
+        assert_eq!(info.repository, "actions/checkout");
+
+        // Test docker action
+        let info = workflow.resolve_action("docker://alpine:3.14");
+        assert!(info.is_docker);
+
+        // Test local action
+        let info = workflow.resolve_action("./.github/actions/my-action");
+        assert!(info.is_local);
+    }
 }

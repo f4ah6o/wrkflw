@@ -169,6 +169,132 @@ pub fn looks_like_secret(value: &str) -> bool {
 mod tests {
     use super::*;
 
+    mod proptest_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Generate a valid secret name
+        fn arb_valid_secret_name() -> impl Strategy<Value = String> {
+            "[a-zA-Z][a-zA-Z0-9_.-]{0,50}"
+                .prop_filter("No consecutive dots or leading/trailing dots", |s| {
+                    !s.starts_with('.') && !s.ends_with('.') && !s.contains("..")
+                })
+        }
+
+        /// Generate an invalid secret name (with forbidden characters)
+        fn arb_invalid_secret_name() -> impl Strategy<Value = String> {
+            "[a-zA-Z][a-zA-Z0-9 /\\\\@#$%]{1,30}"
+                .prop_filter("Must contain forbidden char", |s| {
+                    s.chars().any(|c| c == ' ' || c == '/' || c == '\\' || c == '@' || c == '#')
+                })
+        }
+
+        /// Generate a valid provider name
+        fn arb_valid_provider_name() -> impl Strategy<Value = String> {
+            "[a-zA-Z][a-zA-Z0-9_-]{0,30}"
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(256))]
+
+            /// Valid secret names should pass validation
+            #[test]
+            fn prop_valid_secret_name_passes(name in arb_valid_secret_name()) {
+                // Skip reserved Windows names
+                let reserved = ["CON", "PRN", "AUX", "NUL"];
+                if reserved.iter().any(|r| name.to_uppercase() == *r) {
+                    return Ok(());
+                }
+                let result = validate_secret_name(&name);
+                prop_assert!(result.is_ok(), "Valid name '{}' should pass: {:?}", name, result);
+            }
+
+            /// Names with forbidden characters should fail
+            #[test]
+            fn prop_invalid_secret_name_fails(name in arb_invalid_secret_name()) {
+                let result = validate_secret_name(&name);
+                prop_assert!(result.is_err(), "Invalid name '{}' should fail", name);
+            }
+
+            /// Empty secret name should fail
+            #[test]
+            fn prop_empty_secret_name_fails(_dummy in Just(())) {
+                let result = validate_secret_name("");
+                prop_assert!(result.is_err());
+            }
+
+            /// Names longer than MAX_SECRET_NAME_LENGTH should fail
+            #[test]
+            fn prop_long_secret_name_fails(extra_len in 1usize..100) {
+                let name = "a".repeat(MAX_SECRET_NAME_LENGTH + extra_len);
+                let result = validate_secret_name(&name);
+                prop_assert!(result.is_err(), "Long name should fail");
+            }
+
+            /// Valid provider names should pass
+            #[test]
+            fn prop_valid_provider_name_passes(name in arb_valid_provider_name()) {
+                let result = validate_provider_name(&name);
+                prop_assert!(result.is_ok(), "Valid provider name '{}' should pass", name);
+            }
+
+            /// Empty provider name should fail
+            #[test]
+            fn prop_empty_provider_name_fails(_dummy in Just(())) {
+                let result = validate_provider_name("");
+                prop_assert!(result.is_err());
+            }
+
+            /// Provider names longer than 64 should fail
+            #[test]
+            fn prop_long_provider_name_fails(extra_len in 1usize..50) {
+                let name = "a".repeat(65 + extra_len);
+                let result = validate_provider_name(&name);
+                prop_assert!(result.is_err());
+            }
+
+            /// Secret values without null bytes should pass
+            #[test]
+            fn prop_secret_value_without_null_passes(value in "[^\0]{0,1000}") {
+                let result = validate_secret_value(&value);
+                prop_assert!(result.is_ok(), "Value without null should pass");
+            }
+
+            /// Secret values with null bytes should fail
+            #[test]
+            fn prop_secret_value_with_null_fails(
+                prefix in "[^\0]{0,50}",
+                suffix in "[^\0]{0,50}"
+            ) {
+                let value = format!("{}\0{}", prefix, suffix);
+                let result = validate_secret_value(&value);
+                prop_assert!(result.is_err(), "Value with null should fail");
+            }
+
+            /// sanitize_for_logging replaces newlines with spaces
+            #[test]
+            fn prop_sanitize_removes_newlines(input in ".*") {
+                let result = sanitize_for_logging(&input);
+                prop_assert!(!result.contains('\n'), "Should not contain newline");
+                prop_assert!(!result.contains('\r'), "Should not contain carriage return");
+                prop_assert!(!result.contains('\t'), "Should not contain tab");
+            }
+
+            /// sanitize_for_logging preserves printable characters
+            #[test]
+            fn prop_sanitize_preserves_printable(input in "[a-zA-Z0-9 ]{0,100}") {
+                let result = sanitize_for_logging(&input);
+                prop_assert_eq!(result, input, "Printable chars should be preserved");
+            }
+
+            /// looks_like_secret returns false for short strings
+            #[test]
+            fn prop_short_strings_not_secret(value in "[a-zA-Z0-9]{0,7}") {
+                prop_assert!(!looks_like_secret(&value), "Short string should not look like secret");
+            }
+        }
+    }
+
     #[test]
     fn test_validate_secret_name() {
         // Valid names

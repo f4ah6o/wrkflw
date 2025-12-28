@@ -180,6 +180,87 @@ pub mod fd {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    mod proptest_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Generate a valid GitHub workflow path
+        fn arb_github_workflow_path() -> impl Strategy<Value = PathBuf> {
+            "[a-zA-Z][a-zA-Z0-9_-]{1,20}\\.(yml|yaml)"
+                .prop_map(|name| PathBuf::from(format!(".github/workflows/{}", name)))
+        }
+
+        /// Generate a GitLab CI path
+        fn arb_gitlab_ci_path() -> impl Strategy<Value = PathBuf> {
+            Just(PathBuf::from(".gitlab-ci.yml"))
+        }
+
+        /// Generate a non-workflow YAML file
+        fn arb_non_workflow_yaml() -> impl Strategy<Value = PathBuf> {
+            "[a-zA-Z][a-zA-Z0-9_-]{1,20}\\.(yml|yaml)"
+                .prop_map(|name| PathBuf::from(format!("config/{}", name)))
+        }
+
+        /// Generate a non-YAML file
+        fn arb_non_yaml_file() -> impl Strategy<Value = PathBuf> {
+            "[a-zA-Z][a-zA-Z0-9_-]{1,20}\\.(txt|json|toml|rs)"
+                .prop_map(PathBuf::from)
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(256))]
+
+            /// GitHub workflow paths should be detected
+            #[test]
+            fn prop_github_workflow_detected(path in arb_github_workflow_path()) {
+                prop_assert!(
+                    is_workflow_file(&path),
+                    "GitHub workflow path should be detected: {:?}",
+                    path
+                );
+            }
+
+            /// GitLab CI paths should be detected
+            #[test]
+            fn prop_gitlab_ci_detected(path in arb_gitlab_ci_path()) {
+                prop_assert!(
+                    is_workflow_file(&path),
+                    "GitLab CI path should be detected: {:?}",
+                    path
+                );
+            }
+
+            /// Non-workflow YAML files should not be detected
+            #[test]
+            fn prop_non_workflow_yaml_not_detected(path in arb_non_workflow_yaml()) {
+                prop_assert!(
+                    !is_workflow_file(&path),
+                    "Non-workflow YAML should not be detected: {:?}",
+                    path
+                );
+            }
+
+            /// Non-YAML files should not be detected
+            #[test]
+            fn prop_non_yaml_not_detected(path in arb_non_yaml_file()) {
+                prop_assert!(
+                    !is_workflow_file(&path),
+                    "Non-YAML file should not be detected: {:?}",
+                    path
+                );
+            }
+
+            /// with_stderr_to_null should return the correct value
+            #[test]
+            fn prop_with_stderr_returns_value(value in any::<i32>()) {
+                let result = fd::with_stderr_to_null(|| value);
+                prop_assert!(result.is_ok());
+                prop_assert_eq!(result.unwrap(), value);
+            }
+        }
+    }
 
     #[test]
     fn test_fd_redirection() {
@@ -195,5 +276,20 @@ mod tests {
         // The function should succeed and return our test value on both platforms
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 42);
+    }
+
+    #[test]
+    fn test_is_workflow_file() {
+        // GitHub workflow files
+        assert!(is_workflow_file(Path::new(".github/workflows/ci.yml")));
+        assert!(is_workflow_file(Path::new(".github/workflows/test.yaml")));
+
+        // GitLab CI
+        assert!(is_workflow_file(Path::new(".gitlab-ci.yml")));
+
+        // Non-workflow files
+        assert!(!is_workflow_file(Path::new("config.yml")));
+        assert!(!is_workflow_file(Path::new("src/main.rs")));
+        assert!(!is_workflow_file(Path::new("package.json")));
     }
 }
