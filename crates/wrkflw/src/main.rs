@@ -63,6 +63,10 @@ enum Commands {
         /// Don't set exit code to 1 on validation failure (overrides --exit-code)
         #[arg(long = "no-exit-code", conflicts_with = "exit_code")]
         no_exit_code: bool,
+
+        /// Output validation results as JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Execute workflow or pipeline files locally
@@ -85,6 +89,10 @@ enum Commands {
         /// Explicitly run as GitLab CI/CD pipeline
         #[arg(long)]
         gitlab: bool,
+
+        /// Output execution progress as newline-delimited JSON
+        #[arg(long)]
+        json_output: bool,
     },
 
     /// Open TUI interface to manage workflows
@@ -313,6 +321,7 @@ async fn main() {
             gitlab,
             exit_code,
             no_exit_code,
+            json,
         }) => {
             // Determine the paths to validate (default to .github/workflows when none provided)
             let validate_paths: Vec<PathBuf> = if paths.is_empty() {
@@ -325,10 +334,22 @@ async fn main() {
             let force_gitlab = *gitlab;
             let mut validation_failed = false;
 
+            // Collect all validation results for JSON output
+            let mut all_results: Vec<(String, wrkflw_models::ValidationResult)> = Vec::new();
+
             for validate_path in validate_paths {
                 // Check if the path exists; if not, mark failure but continue
                 if !validate_path.exists() {
-                    eprintln!("Error: Path does not exist: {}", validate_path.display());
+                    let error_msg = format!("Path does not exist: {}", validate_path.display());
+                    if *json {
+                        eprintln!("{}", serde_json::json!({
+                            "path": validate_path.display().to_string(),
+                            "isValid": false,
+                            "issues": [error_msg]
+                        }));
+                    } else {
+                        eprintln!("Error: {}", error_msg);
+                    }
                     validation_failed = true;
                     continue;
                 }
@@ -347,40 +368,78 @@ async fn main() {
                         })
                         .collect::<Vec<_>>();
 
-                    println!(
-                        "Validating {} workflow file(s) in {}...",
-                        entries.len(),
-                        validate_path.display()
-                    );
+                    if !*json {
+                        println!(
+                            "Validating {} workflow file(s) in {}...",
+                            entries.len(),
+                            validate_path.display()
+                        );
+                    }
 
                     for entry in entries {
                         let path = entry.path();
                         let is_gitlab = force_gitlab || is_gitlab_pipeline(&path);
 
-                        let file_failed = if is_gitlab {
-                            validate_gitlab_pipeline(&path, verbose)
-                        } else {
-                            validate_github_workflow(&path, verbose)
-                        };
+                        if *json {
+                            // JSON mode: use functions that return ValidationResult
+                            let result = if is_gitlab {
+                                validate_gitlab_pipeline_json(&path, verbose)
+                            } else {
+                                validate_github_workflow_json(&path, verbose)
+                            };
 
-                        if file_failed {
-                            validation_failed = true;
+                            if !result.is_valid {
+                                validation_failed = true;
+                            }
+                            all_results.push((path.display().to_string(), result));
+                        } else {
+                            // Non-JSON mode: use functions that print progress and return bool
+                            let file_failed = if is_gitlab {
+                                validate_gitlab_pipeline(&path, verbose)
+                            } else {
+                                validate_github_workflow(&path, verbose)
+                            };
+
+                            if file_failed {
+                                validation_failed = true;
+                            }
                         }
                     }
                 } else {
                     // Validate a single workflow file
                     let is_gitlab = force_gitlab || is_gitlab_pipeline(&validate_path);
 
-                    let file_failed = if is_gitlab {
-                        validate_gitlab_pipeline(&validate_path, verbose)
-                    } else {
-                        validate_github_workflow(&validate_path, verbose)
-                    };
+                    if *json {
+                        // JSON mode: use functions that return ValidationResult
+                        let result = if is_gitlab {
+                            validate_gitlab_pipeline_json(&validate_path, verbose)
+                        } else {
+                            validate_github_workflow_json(&validate_path, verbose)
+                        };
 
-                    if file_failed {
-                        validation_failed = true;
+                        if !result.is_valid {
+                            validation_failed = true;
+                        }
+                        all_results.push((validate_path.display().to_string(), result));
+                    } else {
+                        // Non-JSON mode: use functions that print progress and return bool
+                        let file_failed = if is_gitlab {
+                            validate_gitlab_pipeline(&validate_path, verbose)
+                        } else {
+                            validate_github_workflow(&validate_path, verbose)
+                        };
+
+                        if file_failed {
+                            validation_failed = true;
+                        }
                     }
                 }
+            }
+
+            // Output JSON if requested
+            if *json {
+                let output = serde_json::to_string_pretty(&all_results).unwrap();
+                println!("{}", output);
             }
 
             // Set exit code if validation failed and exit_code flag is true (and no_exit_code is false)
@@ -394,6 +453,7 @@ async fn main() {
             show_action_messages: _,
             preserve_containers_on_failure,
             gitlab,
+            json_output,
         }) => {
             // Create execution configuration
             let config = wrkflw_executor::ExecutionConfig {
@@ -401,6 +461,7 @@ async fn main() {
                 verbose,
                 preserve_containers_on_failure: *preserve_containers_on_failure,
                 secrets_config: None, // Use default secrets configuration
+                json_output: *json_output,
             };
 
             // Check if we're explicitly or implicitly running a GitLab pipeline
@@ -634,6 +695,35 @@ fn validate_gitlab_pipeline(path: &Path, verbose: bool) -> bool {
             println!("❌ Invalid");
             eprintln!("Validation failed: {}", e);
             true // Parse error counts as validation failure
+        }
+    }
+}
+
+/// Validate a GitHub workflow file and return ValidationResult
+/// Used for JSON output
+fn validate_github_workflow_json(path: &Path, _verbose: bool) -> wrkflw_models::ValidationResult {
+    match wrkflw_evaluator::evaluate_workflow_file(path, false) {
+        Ok(result) => result,
+        Err(e) => {
+            let mut result = wrkflw_models::ValidationResult::new();
+            result.add_issue(format!("Parse error: {}", e));
+            result
+        }
+    }
+}
+
+/// Validate a GitLab CI/CD pipeline file and return ValidationResult
+/// Used for JSON output
+fn validate_gitlab_pipeline_json(path: &Path, _verbose: bool) -> wrkflw_models::ValidationResult {
+    match wrkflw_parser::gitlab::parse_pipeline(path) {
+        Ok(pipeline) => {
+            // Additional structural validation
+            wrkflw_validators::validate_gitlab_pipeline(&pipeline)
+        }
+        Err(e) => {
+            let mut result = wrkflw_models::ValidationResult::new();
+            result.add_issue(format!("Parse error: {}", e));
+            result
         }
     }
 }

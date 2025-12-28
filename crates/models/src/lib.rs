@@ -1,3 +1,4 @@
+#[derive(serde::Serialize)]
 pub struct ValidationResult {
     pub is_valid: bool,
     pub issues: Vec<String>,

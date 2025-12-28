@@ -141,6 +141,15 @@ async fn execute_github_workflow(
     let mut has_failures = false;
     let mut failure_details = String::new();
 
+    // Emit workflow start event if JSON output is enabled
+    if config.json_output {
+        println!("{}", serde_json::json!({
+            "type": "workflow_start",
+            "path": workflow_path.display().to_string(),
+            "runtime": format!("{:?}", config.runtime_type),
+        }));
+    }
+
     for job_batch in execution_plan {
         // Execute jobs in parallel if they don't depend on each other
         let job_results = execute_job_batch(
@@ -156,6 +165,27 @@ async fn execute_github_workflow(
 
         // Check for job failures and collect details
         for job_result in &job_results {
+            // Emit job start event if JSON output is enabled
+            if config.json_output {
+                println!("{}", serde_json::json!({
+                    "type": "job_start",
+                    "jobId": job_result.name,
+                }));
+            }
+
+            // Emit step events if JSON output is enabled
+            if config.json_output {
+                for (idx, step) in job_result.steps.iter().enumerate() {
+                    println!("{}", serde_json::json!({
+                        "type": "step_complete",
+                        "jobId": job_result.name,
+                        "stepIndex": idx,
+                        "stepName": step.name,
+                        "status": format!("{:?}", step.status),
+                    }));
+                }
+            }
+
             if job_result.status == JobStatus::Failure {
                 has_failures = true;
                 failure_details.push_str(&format!("\n❌ Job failed: {}\n", job_result.name));
@@ -167,9 +197,26 @@ async fn execute_github_workflow(
                     }
                 }
             }
+
+            // Emit job complete event if JSON output is enabled
+            if config.json_output {
+                println!("{}", serde_json::json!({
+                    "type": "job_complete",
+                    "jobId": job_result.name,
+                    "status": format!("{:?}", job_result.status),
+                }));
+            }
         }
 
         results.extend(job_results);
+    }
+
+    // Emit workflow complete event if JSON output is enabled
+    if config.json_output {
+        println!("{}", serde_json::json!({
+            "type": "workflow_complete",
+            "success": !has_failures,
+        }));
     }
 
     // If there were failures, add detailed failure information to the result
@@ -447,6 +494,7 @@ pub struct ExecutionConfig {
     pub verbose: bool,
     pub preserve_containers_on_failure: bool,
     pub secrets_config: Option<SecretConfig>,
+    pub json_output: bool,
 }
 
 pub struct ExecutionResult {
