@@ -113,15 +113,6 @@ pub async fn execute_workflow_cli(
                 RuntimeType::Docker
             }
         }
-        RuntimeType::Podman => {
-            if !wrkflw_executor::podman::is_available() {
-                println!("⚠️ Podman is not available. Using emulation mode instead.");
-                wrkflw_logging::warning("Podman is not available. Using emulation mode instead.");
-                RuntimeType::Emulation
-            } else {
-                RuntimeType::Podman
-            }
-        }
         RuntimeType::SecureEmulation => RuntimeType::SecureEmulation,
         RuntimeType::Emulation => RuntimeType::Emulation,
     };
@@ -429,31 +420,6 @@ pub fn start_next_workflow_execution(
                     RuntimeType::Emulation
                 } else {
                     RuntimeType::Docker
-                }
-            }
-            RuntimeType::Podman => {
-                // Use safe FD redirection to check Podman availability
-                let is_podman_available = match wrkflw_utils::fd::with_stderr_to_null(
-                    wrkflw_executor::podman::is_available,
-                ) {
-                    Ok(result) => result,
-                    Err(_) => {
-                        wrkflw_logging::debug(
-                            "Failed to redirect stderr when checking Podman availability.",
-                        );
-                        false
-                    }
-                };
-
-                if !is_podman_available {
-                    app.logs
-                        .push("Podman is not available. Using emulation mode instead.".to_string());
-                    wrkflw_logging::warning(
-                        "Podman is not available. Using emulation mode instead.",
-                    );
-                    RuntimeType::Emulation
-                } else {
-                    RuntimeType::Podman
                 }
             }
             RuntimeType::SecureEmulation => RuntimeType::SecureEmulation,

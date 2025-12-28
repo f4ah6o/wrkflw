@@ -125,58 +125,6 @@ impl App {
                     RuntimeType::Docker
                 }
             }
-            RuntimeType::Podman => {
-                // Use a timeout for the Podman availability check to prevent hanging
-                let is_podman_available = match std::panic::catch_unwind(|| {
-                    // Use a very short timeout to prevent blocking the UI
-                    let result = std::thread::scope(|s| {
-                        let handle = s.spawn(|| {
-                            wrkflw_utils::fd::with_stderr_to_null(
-                                wrkflw_executor::podman::is_available,
-                            )
-                            .unwrap_or(false)
-                        });
-
-                        // Set a short timeout for the thread
-                        let start = std::time::Instant::now();
-                        let timeout = std::time::Duration::from_secs(1);
-
-                        while start.elapsed() < timeout {
-                            if handle.is_finished() {
-                                return handle.join().unwrap_or(false);
-                            }
-                            std::thread::sleep(std::time::Duration::from_millis(10));
-                        }
-
-                        // If we reach here, the check took too long
-                        wrkflw_logging::warning(
-                            "Podman availability check timed out, falling back to emulation mode",
-                        );
-                        false
-                    });
-                    result
-                }) {
-                    Ok(result) => result,
-                    Err(_) => {
-                        wrkflw_logging::warning("Podman availability check failed with panic, falling back to emulation mode");
-                        false
-                    }
-                };
-
-                if !is_podman_available {
-                    initial_logs.push(
-                        "Podman is not available or unresponsive. Using emulation mode instead."
-                            .to_string(),
-                    );
-                    wrkflw_logging::warning(
-                        "Podman is not available or unresponsive. Using emulation mode instead.",
-                    );
-                    RuntimeType::Emulation
-                } else {
-                    wrkflw_logging::info("Podman is available, using Podman runtime");
-                    RuntimeType::Podman
-                }
-            }
             RuntimeType::Emulation => RuntimeType::Emulation,
             RuntimeType::SecureEmulation => RuntimeType::SecureEmulation,
         };
@@ -231,8 +179,7 @@ impl App {
 
     pub fn toggle_emulation_mode(&mut self) {
         self.runtime_type = match self.runtime_type {
-            RuntimeType::Docker => RuntimeType::Podman,
-            RuntimeType::Podman => RuntimeType::SecureEmulation,
+            RuntimeType::Docker => RuntimeType::SecureEmulation,
             RuntimeType::SecureEmulation => RuntimeType::Emulation,
             RuntimeType::Emulation => RuntimeType::Docker,
         };
@@ -256,7 +203,6 @@ impl App {
     pub fn runtime_type_name(&self) -> &str {
         match self.runtime_type {
             RuntimeType::Docker => "Docker",
-            RuntimeType::Podman => "Podman",
             RuntimeType::SecureEmulation => "Secure Emulation",
             RuntimeType::Emulation => "Emulation (Unsafe)",
         }

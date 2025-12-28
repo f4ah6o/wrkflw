@@ -7,9 +7,8 @@ This document describes the security features implemented in the wrkflw runtime,
 The wrkflw runtime provides multiple execution modes with varying levels of security:
 
 1. **Docker Mode** - Uses Docker containers for isolation (recommended for production)
-2. **Podman Mode** - Uses Podman containers for isolation with rootless support
-3. **Secure Emulation Mode** - 🔒 **NEW**: Sandboxed execution on the host system
-4. **Emulation Mode** - ⚠️ **UNSAFE**: Direct execution on the host system (deprecated)
+2. **Secure Emulation Mode** - 🔒 **NEW**: Sandboxed execution on the host system
+3. **Emulation Mode** - ⚠️ **UNSAFE**: Direct execution on the host system (deprecated)
 
 ## Security Modes
 
@@ -113,7 +112,7 @@ When dangerous commands are detected, wrkflw provides clear security messages:
 ```
 🚫 SECURITY BLOCK: Command 'rm' is not allowed in secure emulation mode.
 This command was blocked for security reasons.
-If you need to run this command, please use Docker or Podman mode instead.
+If you need to run this command, please use Docker mode instead.
 ```
 
 ```
@@ -189,7 +188,7 @@ let sandbox = Sandbox::new(config)?;
 2. **Review Workflow Commands**: Check for any commands that might be blocked and adjust if necessary.
 
 3. **Handle Security Blocks**: If legitimate commands are blocked, consider:
-   - Using Docker/Podman mode for those specific workflows
+   - Using Docker mode for those specific workflows
    - Modifying the workflow to use allowed alternatives
    - Creating a custom sandbox configuration
 
@@ -198,8 +197,8 @@ let sandbox = Sandbox::new(config)?;
 | Use Case | Recommended Mode | Reason |
 |----------|------------------|---------|
 | Local development | Secure Emulation | Good balance of security and convenience |
-| Untrusted workflows | Docker/Podman | Maximum isolation |
-| CI/CD pipelines | Docker/Podman | Consistent, reproducible environment |
+| Untrusted workflows | Docker | Maximum isolation |
+| CI/CD pipelines | Docker | Consistent, reproducible environment |
 | Testing workflows | Secure Emulation | Fast execution with safety |
 | Trusted internal workflows | Secure Emulation | Sufficient security for known-safe code |
 
@@ -210,7 +209,7 @@ let sandbox = Sandbox::new(config)?;
 If you encounter a security block:
 
 1. **Check if the command is necessary**: Can you achieve the same result with an allowed command?
-2. **Use container mode**: Switch to Docker or Podman mode for unrestricted execution
+2. **Use container mode**: Switch to Docker mode for unrestricted execution
 3. **Modify the workflow**: Use safer alternatives where possible
 
 ### Resource Limit Exceeded
@@ -234,7 +233,7 @@ If file access is denied:
 1. **Default to Secure Mode**: Use secure emulation mode by default for local development
 2. **Test Workflows**: Always test workflows in secure mode before deploying
 3. **Review Security Messages**: Pay attention to security blocks and warnings
-4. **Use Containers for Production**: Use Docker/Podman for production deployments
+4. **Use Containers for Production**: Use Docker for production deployments
 5. **Regular Updates**: Keep wrkflw updated for the latest security improvements
 
 ## Security Considerations

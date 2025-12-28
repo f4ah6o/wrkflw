@@ -40,7 +40,6 @@ pub fn render_status_bar(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &App,
         Style::default()
             .bg(match app.runtime_type {
                 RuntimeType::Docker => Color::Blue,
-                RuntimeType::Podman => Color::Cyan,
                 RuntimeType::SecureEmulation => Color::Green,
                 RuntimeType::Emulation => Color::Red,
             })
@@ -72,36 +71,6 @@ pub fn render_status_bar(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &App,
                 },
                 Style::default()
                     .bg(if is_docker_available {
-                        Color::Green
-                    } else {
-                        Color::Red
-                    })
-                    .fg(Color::White),
-            ));
-        }
-        RuntimeType::Podman => {
-            // Check Podman silently using safe FD redirection
-            let is_podman_available = match wrkflw_utils::fd::with_stderr_to_null(
-                wrkflw_executor::podman::is_available,
-            ) {
-                Ok(result) => result,
-                Err(_) => {
-                    wrkflw_logging::debug(
-                        "Failed to redirect stderr when checking Podman availability.",
-                    );
-                    false
-                }
-            };
-
-            status_items.push(Span::raw(" "));
-            status_items.push(Span::styled(
-                if is_podman_available {
-                    " Podman: Connected "
-                } else {
-                    " Podman: Not Available "
-                },
-                Style::default()
-                    .bg(if is_podman_available {
                         Color::Green
                     } else {
                         Color::Red

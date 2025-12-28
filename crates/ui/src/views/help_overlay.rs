@@ -177,11 +177,6 @@ pub fn render_help_content(
         ]),
         Line::from(vec![
             Span::raw("  • "),
-            Span::styled("Podman", Style::default().fg(Color::Blue)),
-            Span::raw(" - Rootless containers"),
-        ]),
-        Line::from(vec![
-            Span::raw("  • "),
             Span::styled("Emulation", Style::default().fg(Color::Red)),
             Span::raw(" - Process mode (UNSAFE)"),
         ]),
@@ -360,7 +355,7 @@ pub fn render_help_content(
             Span::styled("Preserve containers", Style::default().fg(Color::Blue)),
             Span::raw(" on failure"),
         ]),
-        Line::from(vec![Span::raw("  for debugging (Docker/Podman only)")]),
+        Line::from(vec![Span::raw("  for debugging (Docker only)")]),
     ];
 
     // Apply scroll offset to the content

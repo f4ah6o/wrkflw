@@ -1,10 +1,10 @@
 ## wrkflw-executor
 
-The execution engine that runs GitHub Actions workflows locally (Docker, Podman, or emulation).
+The execution engine that runs GitHub Actions workflows locally (Docker or emulation).
 
 - **Features**:
   - Job graph execution with `needs` ordering and parallelism
-  - Docker/Podman container steps and emulation mode
+  - Docker container steps and emulation mode
   - Basic environment/context wiring compatible with Actions
 - **Used by**: `wrkflw` CLI and TUI
 

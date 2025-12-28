@@ -8,8 +8,6 @@ use std::path::PathBuf;
 enum RuntimeChoice {
     /// Use Docker containers for isolation
     Docker,
-    /// Use Podman containers for isolation
-    Podman,
     /// Use process emulation mode (no containers, UNSAFE)
     Emulation,
     /// Use secure emulation mode with sandboxing (recommended for untrusted code)
@@ -20,7 +18,6 @@ impl From<RuntimeChoice> for wrkflw_executor::RuntimeType {
     fn from(choice: RuntimeChoice) -> Self {
         match choice {
             RuntimeChoice::Docker => wrkflw_executor::RuntimeType::Docker,
-            RuntimeChoice::Podman => wrkflw_executor::RuntimeType::Podman,
             RuntimeChoice::Emulation => wrkflw_executor::RuntimeType::Emulation,
             RuntimeChoice::SecureEmulation => wrkflw_executor::RuntimeType::SecureEmulation,
         }
@@ -32,7 +29,7 @@ impl From<RuntimeChoice> for wrkflw_executor::RuntimeType {
     name = "wrkflw",
     about = "GitHub & GitLab CI/CD validator and executor",
     version,
-    long_about = "A CI/CD validator and executor that runs workflows locally.\n\nExamples:\n  wrkflw validate                             # Validate all workflows in .github/workflows\n  wrkflw run .github/workflows/build.yml      # Run a specific workflow\n  wrkflw run .gitlab-ci.yml                   # Run a GitLab CI pipeline\n  wrkflw --verbose run .github/workflows/build.yml  # Run with more output\n  wrkflw --debug run .github/workflows/build.yml    # Run with detailed debug information\n  wrkflw run --runtime emulation .github/workflows/build.yml  # Use emulation mode instead of containers\n  wrkflw run --runtime podman .github/workflows/build.yml     # Use Podman instead of Docker\n  wrkflw run --preserve-containers-on-failure .github/workflows/build.yml  # Keep failed containers for debugging"
+    long_about = "A CI/CD validator and executor that runs workflows locally.\n\nExamples:\n  wrkflw validate                             # Validate all workflows in .github/workflows\n  wrkflw run .github/workflows/build.yml      # Run a specific workflow\n  wrkflw run .gitlab-ci.yml                   # Run a GitLab CI pipeline\n  wrkflw --verbose run .github/workflows/build.yml  # Run with more output\n  wrkflw --debug run .github/workflows/build.yml    # Run with detailed debug information\n  wrkflw run --runtime emulation .github/workflows/build.yml  # Use emulation mode instead of containers\n  wrkflw run --preserve-containers-on-failure .github/workflows/build.yml  # Keep failed containers for debugging"
 )]
 struct Wrkflw {
     #[command(subcommand)]
@@ -73,7 +70,7 @@ enum Commands {
         /// Path to workflow/pipeline file to execute
         path: PathBuf,
 
-        /// Container runtime to use (docker, podman, emulation, secure-emulation)
+        /// Container runtime to use (docker, emulation, secure-emulation)
         #[arg(short, long, value_enum, default_value = "docker")]
         runtime: RuntimeChoice,
 
@@ -95,7 +92,7 @@ enum Commands {
         /// Path to workflow file or directory (defaults to .github/workflows)
         path: Option<PathBuf>,
 
-        /// Container runtime to use (docker, podman, emulation, secure-emulation)
+        /// Container runtime to use (docker, emulation, secure-emulation)
         #[arg(short, long, value_enum, default_value = "docker")]
         runtime: RuntimeChoice,
 
