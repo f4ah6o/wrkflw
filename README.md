@@ -71,6 +71,9 @@ wrkflw validate --verbose path/to/workflow.yml
 
 # Validate GitLab CI pipelines
 wrkflw validate .gitlab-ci.yml --gitlab
+
+# Output validation results as JSON (for CI/IDE integration)
+wrkflw validate --json .github/workflows/ci.yml
 ```
 
 **Exit codes:** `0` (success), `1` (validation failed), `2` (usage error)
@@ -91,6 +94,9 @@ wrkflw run --verbose .github/workflows/ci.yml
 
 # Preserve failed containers for debugging
 wrkflw run --preserve-containers-on-failure .github/workflows/ci.yml
+
+# Output execution progress as newline-delimited JSON
+wrkflw run --json-output .github/workflows/ci.yml
 ```
 
 ### TUI Interface
@@ -189,6 +195,7 @@ wrkflw run --runtime emulation .github/workflows/ci.yml
 - ✅ Environment files (`GITHUB_OUTPUT`, `GITHUB_ENV`, `GITHUB_PATH`, `GITHUB_STEP_SUMMARY`)
 - ✅ Remote workflow triggering
 - ✅ GitLab CI/CD pipeline validation and triggering
+- ✅ VSCode extension with real-time diagnostics
 
 ### Not Supported
 
@@ -282,6 +289,56 @@ When a job fails, WRKFLW keeps the container running:
 ```
 Preserving container abc123 for debugging (exit code: 1).
 Use 'docker exec -it abc123 bash' to inspect.
+```
+
+## VSCode Extension
+
+WRKFLW includes a VSCode extension for real-time workflow validation.
+
+### Features
+
+* Real-time workflow diagnostics as you type
+* Code completion for GitHub Actions syntax
+* Hover information for workflow properties
+* Custom language support for `.github/workflows/*.yml`
+
+### Installation
+
+The extension is available in `vscode-wrkflw/`. To build and install:
+
+```bash
+cd vscode-wrkflw
+pnpm install
+pnpm build
+# Install in VSCode via Install from VSIX
+```
+
+### Commands
+
+* `WRKFLW: Validate Current Workflow` - Validate the currently open workflow file
+
+## WebAssembly
+
+WRKFLW provides WebAssembly bindings for browser-based workflow validation.
+
+### Available Functions
+
+* `expandMatrix(matrix_json)` - Expand matrix configurations
+* `formatCombinationName(job_name, combination_json)` - Format matrix job names
+* `validateWorkflow(workflow_json)` - Validate workflow structure
+
+### Usage Example
+
+```javascript
+import { expandMatrix, validateWorkflow } from 'wrkflw-wasm';
+
+const matrix = {
+  parameters: {
+    os: ["ubuntu-latest", "windows-latest"],
+    node: [14, 16, 18]
+  }
+};
+const combinations = expandMatrix(JSON.stringify(matrix));
 ```
 
 ## Contributing

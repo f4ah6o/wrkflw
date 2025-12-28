@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-WRKFLW is a CLI tool for validating and executing GitHub Actions workflows and GitLab CI/CD pipelines locally. It supports Docker, Podman, and emulation mode for container execution.
+WRKFLW is a CLI tool for validating and executing GitHub Actions workflows and GitLab CI/CD pipelines locally. It supports Docker and emulation modes for container execution.
 
 ## Build & Development Commands
 
@@ -30,6 +30,8 @@ cargo run -- validate                  # Validate workflows in .github/workflows
 cargo run -- run path/to/workflow.yml  # Execute a workflow
 cargo run -- --verbose run ...         # Verbose output
 cargo run -- --debug run ...           # Debug output
+cargo run -- validate --json           # JSON output for validation
+cargo run -- run --json-output ...     # NDJSON streaming for execution
 ```
 
 ## Architecture
@@ -39,12 +41,13 @@ Rust workspace with 14 crates in `crates/`:
 ```
 wrkflw (main binary)
 ├── executor     # Workflow execution engine, job scheduling
-├── runtime      # Container/emulation runtime (docker, podman, sandbox)
+├── runtime      # Container/emulation runtime (docker, sandbox)
 ├── parser       # YAML parsing for GitHub/GitLab workflows
 ├── evaluator    # Workflow validation and expression evaluation
 ├── validators   # Structural validation rules
 ├── models       # Data structures (ValidationResult, GitLab Pipeline)
 ├── matrix       # Matrix build expansion
+├── wasm         # WebAssembly bindings for browser-based validation
 ├── github       # GitHub API integration (trigger workflows)
 ├── gitlab       # GitLab API integration (trigger pipelines)
 ├── ui           # TUI interface (ratatui-based)
@@ -55,7 +58,7 @@ wrkflw (main binary)
 
 ### Key Types
 
-* `RuntimeType` (executor): Docker, Podman, Emulation, SecureEmulation
+* `RuntimeType` (executor): Docker, Emulation, SecureEmulation
 * `ExecutionConfig` (executor): Runtime settings for workflow execution
 * `JobResult`, `StepResult` (executor): Execution results
 * `ValidationResult` (models): Validation outcome with issues list
@@ -76,6 +79,15 @@ Integration tests are in `tests/`:
 * `cleanup_test.rs` - Docker resource cleanup
 
 Test fixtures in `tests/fixtures/` and `tests/workflows/`.
+
+## VSCode Extension
+
+Located in `vscode-wrkflw/`:
+
+* Language server for GitHub Actions workflows
+* Real-time validation and diagnostics as you type
+* Custom language support for `.github/workflows/*.yml`
+* Build with: `cd vscode-wrkflw && pnpm install && pnpm build`
 
 ## Conventions
 

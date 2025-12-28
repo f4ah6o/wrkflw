@@ -71,6 +71,9 @@ wrkflw validate --verbose path/to/workflow.yml
 
 # GitLab CIパイプラインを検証
 wrkflw validate .gitlab-ci.yml --gitlab
+
+# JSON形式で出力（CI/IDE統合用）
+wrkflw validate --json .github/workflows/ci.yml
 ```
 
 **終了コード:** `0`（成功）、`1`（検証失敗）、`2`（使用法エラー）
@@ -91,6 +94,9 @@ wrkflw run --verbose .github/workflows/ci.yml
 
 # デバッグ用に失敗したコンテナを保持
 wrkflw run --preserve-containers-on-failure .github/workflows/ci.yml
+
+# 実行進行状況を改行区切りJSONで出力
+wrkflw run --json-output .github/workflows/ci.yml
 ```
 
 ### TUIインターフェース
@@ -189,6 +195,7 @@ wrkflw run --runtime emulation .github/workflows/ci.yml
 - ✅ 環境ファイル（`GITHUB_OUTPUT`、`GITHUB_ENV`、`GITHUB_PATH`、`GITHUB_STEP_SUMMARY`）
 - ✅ リモートワークフロートリガー
 - ✅ GitLab CI/CDパイプラインの検証とトリガー
+- ✅ リアルタイム診断機能付きVSCode拡張
 
 ### サポートされていない機能
 
@@ -282,6 +289,56 @@ wrkflw run --preserve-containers-on-failure .github/workflows/build.yml
 ```
 Preserving container abc123 for debugging (exit code: 1).
 Use 'docker exec -it abc123 bash' to inspect.
+```
+
+## VSCode拡張機能
+
+WRKFLWには、リアルタイムワークフロー検証を行うVSCode拡張機能が含まれています。
+
+### 機能
+
+* 入力しながらリアルタイムにワークフローを診断
+* GitHub Actions構文のコード補完
+* ワークフロープロパティのホバー情報
+* `.github/workflows/*.yml` のカスタム言語サポート
+
+### インストール
+
+拡張機能は `vscode-wrkflw/` にあります。ビルドしてインストールするには:
+
+```bash
+cd vscode-wrkflw
+pnpm install
+pnpm build
+# VSIXからVSCodeにインストール
+```
+
+### コマンド
+
+* `WRKFLW: Validate Current Workflow` - 開いているワークフローファイルを検証
+
+## WebAssembly
+
+WRKFLWは、ブラウザベースのワークフロー検証のためのWebAssemblyバインディングを提供しています。
+
+### 利用可能な関数
+
+* `expandMatrix(matrix_json)` - マトリックス設定を展開
+* `formatCombinationName(job_name, combination_json)` - マトリックスジョブ名をフォーマット
+* `validateWorkflow(workflow_json)` - ワークフロー構造を検証
+
+### 使用例
+
+```javascript
+import { expandMatrix, validateWorkflow } from 'wrkflw-wasm';
+
+const matrix = {
+  parameters: {
+    os: ["ubuntu-latest", "windows-latest"],
+    node: [14, 16, 18]
+  }
+};
+const combinations = expandMatrix(JSON.stringify(matrix));
 ```
 
 ## コントリビューション
